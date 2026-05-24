@@ -552,98 +552,113 @@
 
 <script>
 const tg = window.Telegram?.WebApp;
-if (tg) {
-  tg.ready();
-  tg.expand();
-  tg.setHeaderColor('#0f0f13');
-  tg.setBackgroundColor('#0f0f13');
-}
+if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor('#0f0f13'); tg.setBackgroundColor('#0f0f13'); }
 
-// ── Надёжное определение: открыто внутри Telegram или нет ─────────────────
-// Проверяем tg.initData (строка, непустая только в реальном Telegram-контексте).
-// НЕ используем initDataUnsafe — он может быть пустым при некоторых сценариях.
-const IN_TG = !!(tg && tg.initData && tg.initData.length > 0);
+// ══════════════════════════════════════════════════════════════════════════════
+//  КОНФИГУРАЦИЯ
+// ══════════════════════════════════════════════════════════════════════════════
+const API_BASE = 'https://your-api-domain.com'; // ← тот же домен/IP где запущен bot.py
+const IN_TG    = !!(tg && tg.initData && tg.initData.length > 0);
+const INIT_DATA = tg?.initData || '';
 
-let tasks = [];
-let reminders = [];
+let tasks         = [];
+let reminders     = [];
 let currentFilter = 'all';
 let currentPriority = 'mid';
-let reminderOn = false;
+let reminderOn    = false;
 
-// ── Инициализация ─────────────────────────────────────────────────────────
-setGreeting();
-setUserInfo();
-
-if (IN_TG) {
-  // Открыто в Telegram — очищаем localStorage чтобы старые данные не мешали,
-  // затем загружаем актуальные данные из URL-параметра (бот передаёт их при открытии)
-  localStorage.removeItem('tflow_tasks');
-  localStorage.removeItem('tflow_reminders');
-  loadFromBot();
-} else {
-  // Браузерный режим (тест без Telegram) — чистый localStorage, без демо-данных
-  tasks     = JSON.parse(localStorage.getItem('tflow_tasks')     || '[]');
-  reminders = JSON.parse(localStorage.getItem('tflow_reminders') || '[]');
-  renderTasks();
-  renderStats();
-  renderReminders();
-}
-
-// ── Загрузка данных из бота ───────────────────────────────────────────────
-function loadFromBot() {
-  // Бот формирует ссылку: https://your-app.com/?data=<base64(json)>
-  // и передаёт туда задачи/напоминания пользователя из БД.
-  // Если ?data= отсутствует — пользователь новый, показываем пустой список.
-  const params = new URLSearchParams(window.location.search);
-  const raw = params.get('data');
-
-  if (raw) {
-    try {
-      const parsed = JSON.parse(atob(decodeURIComponent(raw)));
-      tasks     = Array.isArray(parsed.tasks)     ? parsed.tasks     : [];
-      reminders = Array.isArray(parsed.reminders) ? parsed.reminders : [];
-    } catch(e) {
-      console.warn('Ошибка разбора данных от бота:', e);
-      tasks = []; reminders = [];
+// ══════════════════════════════════════════════════════════════════════════════
+//  API — все запросы идут сюда
+// ══════════════════════════════════════════════════════════════════════════════
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Init-Data': INIT_DATA          // Telegram проверяет подпись на сервере
     }
-  } else {
-    // Новый пользователь — данных нет, всё с нуля
-    tasks = []; reminders = [];
-  }
-
-  renderTasks();
-  renderStats();
-  renderReminders();
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(API_BASE + path, opts);
+  if (!res.ok) throw new Error(`API ${method} ${path} → ${res.status}`);
+  return res.json();
 }
 
-// ── Синхронизация с ботом ─────────────────────────────────────────────────
-// После любого изменения отправляем актуальное состояние боту через sendData.
-// Бот сохраняет в БД и может переоткрыть app с обновлёнными данными.
-function syncToBot(action, payload) {
-  if (IN_TG) {
-    tg.sendData(JSON.stringify({ action, payload, tasks, reminders }));
-  } else {
+// Локальное сохранение (браузерный режим — тест без Telegram)
+function localSave() {
+  if (!IN_TG) {
     localStorage.setItem('tflow_tasks',     JSON.stringify(tasks));
     localStorage.setItem('tflow_reminders', JSON.stringify(reminders));
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  ИНИЦИАЛИЗАЦИЯ
+// ══════════════════════════════════════════════════════════════════════════════
+setGreeting();
+setUserInfo();
+loadData();
+
+async function loadData() {
+  if (IN_TG) {
+    try {
+      showLoading(true);
+      const [t, r] = await Promise.all([
+        api('GET', '/api/tasks'),
+        api('GET', '/api/reminders')
+      ]);
+      tasks     = t;
+      reminders = r;
+    } catch(e) {
+      console.error('Ошибка загрузки:', e);
+      tasks = []; reminders = [];
+      showToast('Ошибка загрузки данных');
+    } finally {
+      showLoading(false);
+    }
+  } else {
+    // Браузерный режим: localStorage, без демо-задач
+    tasks     = JSON.parse(localStorage.getItem('tflow_tasks')     || '[]');
+    reminders = JSON.parse(localStorage.getItem('tflow_reminders') || '[]');
+  }
+  renderTasks();
+  renderStats();
+  renderReminders();
+}
+
+function showLoading(on) {
+  let el = document.getElementById('loading-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'loading-overlay';
+    el.style.cssText = 'position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:999;font-size:14px;color:var(--muted);flex-direction:column;gap:12px';
+    el.innerHTML = '<div style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite"></div>Загружаем задачи...';
+    document.body.appendChild(el);
+  }
+  el.style.display = on ? 'flex' : 'none';
+}
+
 function setGreeting() {
   const h = new Date().getHours();
   const el = document.getElementById('greeting');
-  if (h < 12) el.textContent = 'Доброе утро 👋';
-  else if (h < 18) el.textContent = 'Добрый день 👋';
-  else el.textContent = 'Добрый вечер 👋';
+  if (el) {
+    if (h < 12) el.textContent = 'Доброе утро 👋';
+    else if (h < 18) el.textContent = 'Добрый день 👋';
+    else el.textContent = 'Добрый вечер 👋';
+  }
 }
 
 function setUserInfo() {
   if (tg?.initDataUnsafe?.user) {
     const u = tg.initDataUnsafe.user;
-    document.getElementById('user-avatar').textContent = (u.first_name || 'U')[0].toUpperCase();
+    const el = document.getElementById('user-avatar');
+    if (el) el.textContent = (u.first_name || 'U')[0].toUpperCase();
   }
 }
 
-// ── NAV ───────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//  NAV
+// ══════════════════════════════════════════════════════════════════════════════
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const page = btn.dataset.page;
@@ -656,7 +671,6 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   });
 });
 
-// ── FILTER ────────────────────────────────────────────────────────────────
 document.querySelectorAll('.filter-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
@@ -666,22 +680,21 @@ document.querySelectorAll('.filter-tab').forEach(tab => {
   });
 });
 
-// ── RENDER TASKS ──────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//  ЗАДАЧИ — RENDER
+// ══════════════════════════════════════════════════════════════════════════════
 function renderTasks() {
   const list = document.getElementById('task-list');
   let filtered = tasks;
-  if (currentFilter === 'active')       filtered = tasks.filter(t => !t.done);
-  else if (currentFilter === 'done')    filtered = tasks.filter(t => t.done);
+  if (currentFilter === 'active')    filtered = tasks.filter(t => !t.done);
+  else if (currentFilter === 'done') filtered = tasks.filter(t => t.done);
   else if (['work','personal','health','study'].includes(currentFilter))
     filtered = tasks.filter(t => t.cat === currentFilter);
 
   list.innerHTML = '';
   if (!filtered.length) {
-    list.innerHTML = `
-      <div class="empty">
-        <div class="empty-icon">✨</div>
-        <div>Задач нет.<br>Нажмите <strong>+</strong> чтобы добавить первую!</div>
-      </div>`;
+    list.innerHTML = `<div class="empty"><div class="empty-icon">✨</div>
+      <div>Задач нет.<br>Нажмите <strong>+</strong> чтобы добавить!</div></div>`;
     updateStats();
     return;
   }
@@ -692,18 +705,14 @@ function renderTasks() {
 function createTaskEl(t) {
   const el = document.createElement('div');
   el.className = 'task-item' + (t.done ? ' completed' : '');
-  el.dataset.id = t.id;
-
-  const catLabels = { work: 'Работа', personal: 'Личное', health: 'Здоровье', study: 'Учёба' };
+  const catLabels = { work:'Работа', personal:'Личное', health:'Здоровье', study:'Учёба' };
   const dueHtml = t.due ? `<span class="task-time">
     <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" fill="none">
       <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-    </svg>
-    ${formatDue(t.due)}
-  </span>` : '';
+    </svg>${formatDue(t.due)}</span>` : '';
 
   el.innerHTML = `
-    <button class="task-check ${t.done ? 'done' : ''}" onclick="toggleTask('${t.id}')">
+    <button class="task-check ${t.done?'done':''}" onclick="toggleTask('${t.id}')">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="20 6 9 17 4 12"/>
       </svg>
@@ -711,62 +720,68 @@ function createTaskEl(t) {
     <div class="task-body">
       <div class="task-title">${escHtml(t.title)}</div>
       <div class="task-meta">
-        <span class="tag ${t.cat}">${catLabels[t.cat] || t.cat}</span>
-        ${dueHtml}
+        <span class="tag ${t.cat}">${catLabels[t.cat]||t.cat}</span>${dueHtml}
       </div>
     </div>
     <div class="task-priority ${t.priority}"></div>
     <button class="task-delete" onclick="deleteTask('${t.id}')">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="3 6 5 6 21 6"/>
-        <path d="M19 6l-1 14H6L5 6"/>
-        <path d="M10 11v6"/><path d="M14 11v6"/>
+        <path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
       </svg>
-    </button>
-  `;
+    </button>`;
   return el;
 }
 
-function toggleTask(id) {
+// ══════════════════════════════════════════════════════════════════════════════
+//  ЗАДАЧИ — ДЕЙСТВИЯ (сохраняют в БД через API)
+// ══════════════════════════════════════════════════════════════════════════════
+async function toggleTask(id) {
   const t = tasks.find(x => x.id === id);
   if (!t) return;
-  t.done = !t.done;
+  t.done   = !t.done;
   t.doneAt = t.done ? Date.now() : null;
-  syncToBot('toggle_task', { id });
   renderTasks();
   if (t.done) showToast('Задача выполнена! 🎉');
+  // Сохраняем в БД
+  if (IN_TG) {
+    try { await api('POST', '/api/tasks', t); }
+    catch(e) { console.error('toggle save failed', e); }
+  } else localSave();
 }
 
-function deleteTask(id) {
+async function deleteTask(id) {
   tasks = tasks.filter(x => x.id !== id);
-  syncToBot('delete_task', { id });
   renderTasks();
   showToast('Задача удалена');
+  if (IN_TG) {
+    try { await api('DELETE', `/api/tasks/${id}`); }
+    catch(e) { console.error('delete failed', e); }
+  } else localSave();
 }
 
 function updateStats() {
-  const total = tasks.length;
-  const done  = tasks.filter(t => t.done).length;
-  const active = total - done;
-  const pct = total ? Math.round((done / total) * 100) : 0;
+  const total = tasks.length, done = tasks.filter(t=>t.done).length;
+  const pct = total ? Math.round(done/total*100) : 0;
   document.getElementById('s-total').textContent  = total;
   document.getElementById('s-done').textContent   = done;
-  document.getElementById('s-active').textContent = active;
+  document.getElementById('s-active').textContent = total - done;
   document.getElementById('progress-pct').textContent = pct + '%';
   document.getElementById('progress-fill').style.width = pct + '%';
 }
 
 function formatDue(iso) {
   const d = new Date(iso);
-  return d.toLocaleDateString('ru', { day:'numeric', month:'short' }) + ', ' +
-    d.toLocaleTimeString('ru', { hour:'2-digit', minute:'2-digit' });
+  return d.toLocaleDateString('ru',{day:'numeric',month:'short'}) + ', ' +
+    d.toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
 }
-
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ── ADD TASK ──────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//  ДОБАВЛЕНИЕ ЗАДАЧИ
+// ══════════════════════════════════════════════════════════════════════════════
 function openAddModal() {
   document.getElementById('task-name').value = '';
   document.getElementById('task-due').value  = '';
@@ -780,20 +795,18 @@ document.getElementById('add-modal').addEventListener('click', e => {
   if (e.target === document.getElementById('add-modal'))
     document.getElementById('add-modal').classList.remove('open');
 });
-
 function setPriority(p) {
   currentPriority = p;
   document.querySelectorAll('.priority-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector('.priority-btn.' + p).classList.add('active');
+  document.querySelector('.priority-btn.'+p).classList.add('active');
 }
-
 function toggleRemind() {
   reminderOn = !reminderOn;
   document.getElementById('remind-toggle').classList.toggle('on', reminderOn);
   document.getElementById('remind-time-wrap').classList.toggle('show', reminderOn);
 }
 
-function addTask() {
+async function addTask() {
   const name = document.getElementById('task-name').value.trim();
   if (!name) { showToast('Введите название задачи'); return; }
 
@@ -809,89 +822,80 @@ function addTask() {
     createdAt: Date.now()
   };
 
+  // Сразу показываем — UX без задержки
   tasks.unshift(task);
-  syncToBot('add_task', task);
-
   document.getElementById('add-modal').classList.remove('open');
   currentFilter = 'all';
   document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
   document.querySelector('.filter-tab[data-filter="all"]').classList.add('active');
   renderTasks();
   showToast('Задача добавлена! ✅');
+
+  // Сохраняем в БД
+  if (IN_TG) {
+    try { await api('POST', '/api/tasks', task); }
+    catch(e) { console.error('add save failed', e); showToast('Ошибка сохранения!'); }
+  } else localSave();
 }
 
-// ── STATS ─────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//  СТАТИСТИКА
+// ══════════════════════════════════════════════════════════════════════════════
 function renderStats() {
-  renderStreak();
-  renderWeekChart();
-  renderCatChart();
-}
-
-function renderStreak() {
   const today = new Date();
   let streak = 0;
   for (let i = 0; i < 60; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
+    const d = new Date(today); d.setDate(d.getDate()-i);
     const key = d.toDateString();
-    const hasDone = tasks.some(t => t.done && t.doneAt && new Date(t.doneAt).toDateString() === key);
-    if (hasDone) streak++;
-    else if (i > 0) break;
+    if (tasks.some(t=>t.done && t.doneAt && new Date(t.doneAt).toDateString()===key)) streak++;
+    else if (i>0) break;
   }
   document.getElementById('streak-num').textContent = streak;
-}
 
-function renderWeekChart() {
+  // Недельный график
   const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
   const chart = document.getElementById('week-chart');
   chart.innerHTML = '';
-  const today = new Date();
-  const data = days.map((d, i) => {
+  const data = days.map((d,i) => {
     const date = new Date(today);
-    const dow  = today.getDay() || 7;
-    date.setDate(date.getDate() - (dow - 1 - i));
-    const dateStr = date.toDateString();
-    const total = tasks.filter(t => new Date(t.createdAt).toDateString() === dateStr).length;
-    const done  = tasks.filter(t => t.done && t.doneAt && new Date(t.doneAt).toDateString() === dateStr).length;
-    return { day: d, total, done };
+    date.setDate(date.getDate() - ((today.getDay()||7)-1-i));
+    const ds = date.toDateString();
+    return {
+      day: d,
+      total: tasks.filter(t=>new Date(t.createdAt).toDateString()===ds).length,
+      done:  tasks.filter(t=>t.done && t.doneAt && new Date(t.doneAt).toDateString()===ds).length
+    };
   });
-  const maxVal = Math.max(...data.map(d => d.total), 1);
+  const maxV = Math.max(...data.map(d=>d.total),1);
   data.forEach(d => {
-    const wrap = document.createElement('div');
-    wrap.className = 'bar-wrap';
-    const h = Math.max((d.total / maxVal) * 90, 4);
-    wrap.innerHTML = `<div class="bar" style="height:${h}px"></div><div class="bar-day">${d.day}</div>`;
-    chart.appendChild(wrap);
+    const w = document.createElement('div');
+    w.className = 'bar-wrap';
+    w.innerHTML = `<div class="bar" style="height:${Math.max(d.total/maxV*90,4)}px"></div>
+                   <div class="bar-day">${d.day}</div>`;
+    chart.appendChild(w);
   });
-}
 
-function renderCatChart() {
-  const cats = {
-    work:     { name: 'Работа',   color: '#7c6bff' },
-    personal: { name: 'Личное',   color: '#34d399' },
-    health:   { name: 'Здоровье', color: '#f87171' },
-    study:    { name: 'Учёба',    color: '#f59e0b' }
-  };
+  // По категориям
+  const cats = {work:{name:'Работа',color:'#7c6bff'},personal:{name:'Личное',color:'#34d399'},
+    health:{name:'Здоровье',color:'#f87171'},study:{name:'Учёба',color:'#f59e0b'}};
   const total = tasks.length || 1;
-  const chart = document.getElementById('cat-chart');
-  chart.innerHTML = '';
-  Object.entries(cats).forEach(([key, cat]) => {
-    const count = tasks.filter(t => t.cat === key).length;
-    const pct   = Math.round((count / total) * 100);
+  const catChart = document.getElementById('cat-chart');
+  catChart.innerHTML = '';
+  Object.entries(cats).forEach(([key,cat]) => {
+    const pct = Math.round(tasks.filter(t=>t.cat===key).length/total*100);
     const el = document.createElement('div');
     el.className = 'cat-item';
-    el.innerHTML = `
-      <div class="cat-dot" style="background:${cat.color}"></div>
+    el.innerHTML = `<div class="cat-dot" style="background:${cat.color}"></div>
       <div class="cat-name">${cat.name}</div>
-      <div class="cat-bar-bg">
-        <div class="cat-bar-fill" style="width:${pct}%;background:${cat.color}"></div>
-      </div>
+      <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${pct}%;background:${cat.color}"></div></div>
       <div class="cat-pct">${pct}%</div>`;
-    chart.appendChild(el);
+    catChart.appendChild(el);
   });
 }
 
-// ── REMINDERS ─────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//  НАПОМИНАНИЯ
+// ══════════════════════════════════════════════════════════════════════════════
 function openReminderModal() {
   document.getElementById('rem-name').value = '';
   document.getElementById('rem-modal').classList.add('open');
@@ -901,7 +905,7 @@ document.getElementById('rem-modal').addEventListener('click', e => {
     document.getElementById('rem-modal').classList.remove('open');
 });
 
-function addReminder() {
+async function addReminder() {
   const name = document.getElementById('rem-name').value.trim();
   if (!name) { showToast('Введите название'); return; }
   const r = {
@@ -911,20 +915,23 @@ function addReminder() {
     time: document.getElementById('rem-time').value
   };
   reminders.push(r);
-  syncToBot('add_reminder', r);
   document.getElementById('rem-modal').classList.remove('open');
   renderReminders();
   showToast('Напоминание сохранено 🔔');
+  if (IN_TG) {
+    try { await api('POST', '/api/reminders', r); }
+    catch(e) { console.error('reminder save failed', e); }
+  } else localSave();
 }
 
 function renderReminders() {
   const list = document.getElementById('reminders-list');
   list.innerHTML = '';
   if (!reminders.length) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">🔔</div><div>Напоминаний пока нет.<br>Добавьте первое!</div></div>';
+    list.innerHTML = '<div class="empty"><div class="empty-icon">🔔</div><div>Напоминаний пока нет.</div></div>';
     return;
   }
-  const typeLabels = { once: 'Однократно', daily: 'Ежедневно', weekly: 'Еженедельно' };
+  const tl = {once:'Однократно',daily:'Ежедневно',weekly:'Еженедельно'};
   reminders.forEach(r => {
     const el = document.createElement('div');
     el.className = 'reminder-item';
@@ -937,7 +944,7 @@ function renderReminders() {
       </div>
       <div class="reminder-body">
         <div class="reminder-name">${escHtml(r.name)}</div>
-        <div class="reminder-desc">${typeLabels[r.type] || r.type} · ${r.time}</div>
+        <div class="reminder-desc">${tl[r.type]||r.type} · ${r.time}</div>
       </div>
       <button class="reminder-del" onclick="deleteReminder('${r.id}')">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -948,20 +955,30 @@ function renderReminders() {
   });
 }
 
-function deleteReminder(id) {
+async function deleteReminder(id) {
   reminders = reminders.filter(r => r.id !== id);
-  syncToBot('delete_reminder', { id });
   renderReminders();
   showToast('Напоминание удалено');
+  if (IN_TG) {
+    try { await api('DELETE', `/api/reminders/${id}`); }
+    catch(e) { console.error('reminder delete failed', e); }
+  } else localSave();
 }
 
-// ── TOAST ─────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//  TOAST + CSS animation
+// ══════════════════════════════════════════════════════════════════════════════
 function showToast(msg) {
   const el = document.getElementById('toast');
   document.getElementById('toast-msg').textContent = msg;
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 2500);
 }
+
+// spin animation для лоадера
+const style = document.createElement('style');
+style.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
+document.head.appendChild(style);
 </script>
 </body>
 </html>
