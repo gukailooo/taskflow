@@ -554,11 +554,11 @@
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor('#0f0f13'); tg.setBackgroundColor('#0f0f13'); }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  КОНФИГУРАЦИЯ
-// ══════════════════════════════════════════════════════════════════════════════
-const API_BASE = 'https://your-api-domain.com'; // ← тот же домен/IP где запущен bot.py
-const IN_TG    = !!(tg && tg.initData && tg.initData.length > 0);
+// ══════════════════════════════════════════════════════════════════════════
+//  НАСТРОЙКИ
+// ══════════════════════════════════════════════════════════════════════════
+const API_BASE  = 'https://your-api-domain.com';   // ← URL/IP вашего сервера с bot.py
+const IN_TG     = !!(tg && tg.initData && tg.initData.length > 0);
 const INIT_DATA = tg?.initData || '';
 
 let tasks         = [];
@@ -567,57 +567,42 @@ let currentFilter = 'all';
 let currentPriority = 'mid';
 let reminderOn    = false;
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  API — все запросы идут сюда
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+//  API-клиент
+//  Каждый запрос несёт заголовок X-Init-Data — бот проверяет подпись
+//  и по ней определяет user_id. Никакого токена в HTML не нужно.
+// ══════════════════════════════════════════════════════════════════════════
 async function api(method, path, body) {
-  const opts = {
+  const res = await fetch(API_BASE + path, {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Init-Data': INIT_DATA          // Telegram проверяет подпись на сервере
-    }
-  };
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(API_BASE + path, opts);
-  if (!res.ok) throw new Error(`API ${method} ${path} → ${res.status}`);
+    headers: { 'Content-Type': 'application/json', 'X-Init-Data': INIT_DATA },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`${method} ${path} → HTTP ${res.status}`);
   return res.json();
 }
 
-// Локальное сохранение (браузерный режим — тест без Telegram)
-function localSave() {
-  if (!IN_TG) {
-    localStorage.setItem('tflow_tasks',     JSON.stringify(tasks));
-    localStorage.setItem('tflow_reminders', JSON.stringify(reminders));
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  ИНИЦИАЛИЗАЦИЯ
-// ══════════════════════════════════════════════════════════════════════════════
-setGreeting();
-setUserInfo();
-loadData();
-
+// ══════════════════════════════════════════════════════════════════════════
+//  ЗАГРУЗКА ДАННЫХ ПРИ КАЖДОМ ОТКРЫТИИ
+//  Первый раз — пустой список. Второй и далее — задачи пользователя из БД.
+// ══════════════════════════════════════════════════════════════════════════
 async function loadData() {
   if (IN_TG) {
+    showSpinner(true);
     try {
-      showLoading(true);
-      const [t, r] = await Promise.all([
+      [tasks, reminders] = await Promise.all([
         api('GET', '/api/tasks'),
-        api('GET', '/api/reminders')
+        api('GET', '/api/reminders'),
       ]);
-      tasks     = t;
-      reminders = r;
-    } catch(e) {
+    } catch (e) {
       console.error('Ошибка загрузки:', e);
       tasks = []; reminders = [];
-      showToast('Ошибка загрузки данных');
+      showToast('Нет соединения с сервером');
     } finally {
-      showLoading(false);
+      showSpinner(false);
     }
   } else {
-    // Браузерный режим: localStorage, без демо-задач
+    // Браузерный тест (без Telegram) — localStorage, без демо-данных
     tasks     = JSON.parse(localStorage.getItem('tflow_tasks')     || '[]');
     reminders = JSON.parse(localStorage.getItem('tflow_reminders') || '[]');
   }
@@ -626,39 +611,50 @@ async function loadData() {
   renderReminders();
 }
 
-function showLoading(on) {
-  let el = document.getElementById('loading-overlay');
+// Браузерный fallback-сохранение
+function localSave() {
+  localStorage.setItem('tflow_tasks',     JSON.stringify(tasks));
+  localStorage.setItem('tflow_reminders', JSON.stringify(reminders));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  СТАРТ
+// ══════════════════════════════════════════════════════════════════════════
+setGreeting();
+setUserInfo();
+loadData();   // ← загружаем задачи сразу при открытии
+
+function setGreeting() {
+  const h = new Date().getHours();
+  const el = document.getElementById('greeting');
+  if (el) el.textContent = h < 12 ? 'Доброе утро 👋' : h < 18 ? 'Добрый день 👋' : 'Добрый вечер 👋';
+}
+function setUserInfo() {
+  const u = tg?.initDataUnsafe?.user;
+  if (u) {
+    const el = document.getElementById('user-avatar');
+    if (el) el.textContent = (u.first_name || 'U')[0].toUpperCase();
+  }
+}
+function showSpinner(on) {
+  let el = document.getElementById('spinner');
   if (!el) {
     el = document.createElement('div');
-    el.id = 'loading-overlay';
-    el.style.cssText = 'position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:999;font-size:14px;color:var(--muted);flex-direction:column;gap:12px';
-    el.innerHTML = '<div style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite"></div>Загружаем задачи...';
+    el.id = 'spinner';
+    el.innerHTML = `
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+      <div style="width:36px;height:36px;border:3px solid rgba(255,255,255,.1);
+        border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite"></div>
+      <div style="color:var(--muted);font-size:13px;margin-top:12px">Загрузка задач...</div>`;
+    el.style.cssText = 'position:fixed;inset:0;background:var(--bg);z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center';
     document.body.appendChild(el);
   }
   el.style.display = on ? 'flex' : 'none';
 }
 
-function setGreeting() {
-  const h = new Date().getHours();
-  const el = document.getElementById('greeting');
-  if (el) {
-    if (h < 12) el.textContent = 'Доброе утро 👋';
-    else if (h < 18) el.textContent = 'Добрый день 👋';
-    else el.textContent = 'Добрый вечер 👋';
-  }
-}
-
-function setUserInfo() {
-  if (tg?.initDataUnsafe?.user) {
-    const u = tg.initDataUnsafe.user;
-    const el = document.getElementById('user-avatar');
-    if (el) el.textContent = (u.first_name || 'U')[0].toUpperCase();
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
 //  NAV
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const page = btn.dataset.page;
@@ -670,7 +666,6 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     if (page === 'stats') renderStats();
   });
 });
-
 document.querySelectorAll('.filter-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
@@ -680,14 +675,14 @@ document.querySelectorAll('.filter-tab').forEach(tab => {
   });
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  ЗАДАЧИ — RENDER
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+//  ЗАДАЧИ — ОТОБРАЖЕНИЕ
+// ══════════════════════════════════════════════════════════════════════════
 function renderTasks() {
   const list = document.getElementById('task-list');
   let filtered = tasks;
   if (currentFilter === 'active')    filtered = tasks.filter(t => !t.done);
-  else if (currentFilter === 'done') filtered = tasks.filter(t => t.done);
+  else if (currentFilter === 'done') filtered = tasks.filter(t =>  t.done);
   else if (['work','personal','health','study'].includes(currentFilter))
     filtered = tasks.filter(t => t.cat === currentFilter);
 
@@ -695,22 +690,20 @@ function renderTasks() {
   if (!filtered.length) {
     list.innerHTML = `<div class="empty"><div class="empty-icon">✨</div>
       <div>Задач нет.<br>Нажмите <strong>+</strong> чтобы добавить!</div></div>`;
-    updateStats();
-    return;
+    updateStats(); return;
   }
-  filtered.forEach(t => list.appendChild(createTaskEl(t)));
+  filtered.forEach(t => list.appendChild(makeTaskEl(t)));
   updateStats();
 }
 
-function createTaskEl(t) {
-  const el = document.createElement('div');
-  el.className = 'task-item' + (t.done ? ' completed' : '');
-  const catLabels = { work:'Работа', personal:'Личное', health:'Здоровье', study:'Учёба' };
+function makeTaskEl(t) {
+  const labels = { work:'Работа', personal:'Личное', health:'Здоровье', study:'Учёба' };
   const dueHtml = t.due ? `<span class="task-time">
     <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" fill="none">
       <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
     </svg>${formatDue(t.due)}</span>` : '';
-
+  const el = document.createElement('div');
+  el.className = 'task-item' + (t.done ? ' completed' : '');
   el.innerHTML = `
     <button class="task-check ${t.done?'done':''}" onclick="toggleTask('${t.id}')">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
@@ -718,10 +711,8 @@ function createTaskEl(t) {
       </svg>
     </button>
     <div class="task-body">
-      <div class="task-title">${escHtml(t.title)}</div>
-      <div class="task-meta">
-        <span class="tag ${t.cat}">${catLabels[t.cat]||t.cat}</span>${dueHtml}
-      </div>
+      <div class="task-title">${esc(t.title)}</div>
+      <div class="task-meta"><span class="tag ${t.cat}">${labels[t.cat]||t.cat}</span>${dueHtml}</div>
     </div>
     <div class="task-priority ${t.priority}"></div>
     <button class="task-delete" onclick="deleteTask('${t.id}')">
@@ -733,20 +724,51 @@ function createTaskEl(t) {
   return el;
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  ЗАДАЧИ — ДЕЙСТВИЯ (сохраняют в БД через API)
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+//  ЗАДАЧИ — ДЕЙСТВИЯ (сразу обновляем UI, затем сохраняем в БД)
+// ══════════════════════════════════════════════════════════════════════════
+async function addTask() {
+  const name = document.getElementById('task-name').value.trim();
+  if (!name) { showToast('Введите название задачи'); return; }
+
+  const task = {
+    id:        Date.now().toString(),
+    title:     name,
+    cat:       document.getElementById('task-cat').value,
+    priority:  currentPriority,
+    due:       document.getElementById('task-due').value || null,
+    remind:    reminderOn ? document.getElementById('remind-time').value : null,
+    done:      false,
+    doneAt:    null,
+    createdAt: Date.now(),
+  };
+
+  // Мгновенно показываем — не ждём ответа сервера
+  tasks.unshift(task);
+  document.getElementById('add-modal').classList.remove('open');
+  currentFilter = 'all';
+  document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('.filter-tab[data-filter="all"]').classList.add('active');
+  renderTasks();
+  showToast('Задача добавлена ✅');
+
+  // Сохраняем в БД
+  if (IN_TG) {
+    try { await api('POST', '/api/tasks', task); }
+    catch(e) { console.error('Не удалось сохранить задачу:', e); showToast('Ошибка сохранения!'); }
+  } else localSave();
+}
+
 async function toggleTask(id) {
   const t = tasks.find(x => x.id === id);
   if (!t) return;
   t.done   = !t.done;
   t.doneAt = t.done ? Date.now() : null;
   renderTasks();
-  if (t.done) showToast('Задача выполнена! 🎉');
-  // Сохраняем в БД
+  if (t.done) showToast('Выполнено! 🎉');
   if (IN_TG) {
     try { await api('POST', '/api/tasks', t); }
-    catch(e) { console.error('toggle save failed', e); }
+    catch(e) { console.error('toggle failed:', e); }
   } else localSave();
 }
 
@@ -756,7 +778,7 @@ async function deleteTask(id) {
   showToast('Задача удалена');
   if (IN_TG) {
     try { await api('DELETE', `/api/tasks/${id}`); }
-    catch(e) { console.error('delete failed', e); }
+    catch(e) { console.error('delete failed:', e); }
   } else localSave();
 }
 
@@ -770,21 +792,12 @@ function updateStats() {
   document.getElementById('progress-fill').style.width = pct + '%';
 }
 
-function formatDue(iso) {
-  const d = new Date(iso);
-  return d.toLocaleDateString('ru',{day:'numeric',month:'short'}) + ', ' +
-    d.toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
-}
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  ДОБАВЛЕНИЕ ЗАДАЧИ
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+//  МОДАЛ ДОБАВЛЕНИЯ
+// ══════════════════════════════════════════════════════════════════════════
 function openAddModal() {
-  document.getElementById('task-name').value = '';
-  document.getElementById('task-due').value  = '';
+  document.getElementById('task-name').value   = '';
+  document.getElementById('task-due').value    = '';
   document.getElementById('remind-time').value = '';
   reminderOn = false;
   document.getElementById('remind-toggle').classList.remove('on');
@@ -806,68 +819,33 @@ function toggleRemind() {
   document.getElementById('remind-time-wrap').classList.toggle('show', reminderOn);
 }
 
-async function addTask() {
-  const name = document.getElementById('task-name').value.trim();
-  if (!name) { showToast('Введите название задачи'); return; }
-
-  const task = {
-    id:        Date.now().toString(),
-    title:     name,
-    cat:       document.getElementById('task-cat').value,
-    priority:  currentPriority,
-    due:       document.getElementById('task-due').value || null,
-    remind:    reminderOn ? document.getElementById('remind-time').value : null,
-    done:      false,
-    doneAt:    null,
-    createdAt: Date.now()
-  };
-
-  // Сразу показываем — UX без задержки
-  tasks.unshift(task);
-  document.getElementById('add-modal').classList.remove('open');
-  currentFilter = 'all';
-  document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
-  document.querySelector('.filter-tab[data-filter="all"]').classList.add('active');
-  renderTasks();
-  showToast('Задача добавлена! ✅');
-
-  // Сохраняем в БД
-  if (IN_TG) {
-    try { await api('POST', '/api/tasks', task); }
-    catch(e) { console.error('add save failed', e); showToast('Ошибка сохранения!'); }
-  } else localSave();
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
 //  СТАТИСТИКА
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
 function renderStats() {
+  // Streak
   const today = new Date();
   let streak = 0;
   for (let i = 0; i < 60; i++) {
     const d = new Date(today); d.setDate(d.getDate()-i);
-    const key = d.toDateString();
-    if (tasks.some(t=>t.done && t.doneAt && new Date(t.doneAt).toDateString()===key)) streak++;
-    else if (i>0) break;
+    if (tasks.some(t=>t.done&&t.doneAt&&new Date(t.doneAt).toDateString()===d.toDateString()))
+      streak++;
+    else if (i > 0) break;
   }
   document.getElementById('streak-num').textContent = streak;
 
   // Недельный график
-  const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  const dayNames = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
   const chart = document.getElementById('week-chart');
   chart.innerHTML = '';
-  const data = days.map((d,i) => {
+  const chartData = dayNames.map((d,i) => {
     const date = new Date(today);
     date.setDate(date.getDate() - ((today.getDay()||7)-1-i));
     const ds = date.toDateString();
-    return {
-      day: d,
-      total: tasks.filter(t=>new Date(t.createdAt).toDateString()===ds).length,
-      done:  tasks.filter(t=>t.done && t.doneAt && new Date(t.doneAt).toDateString()===ds).length
-    };
+    return { day:d, total:tasks.filter(t=>new Date(t.createdAt).toDateString()===ds).length };
   });
-  const maxV = Math.max(...data.map(d=>d.total),1);
-  data.forEach(d => {
+  const maxV = Math.max(...chartData.map(d=>d.total), 1);
+  chartData.forEach(d => {
     const w = document.createElement('div');
     w.className = 'bar-wrap';
     w.innerHTML = `<div class="bar" style="height:${Math.max(d.total/maxV*90,4)}px"></div>
@@ -875,7 +853,7 @@ function renderStats() {
     chart.appendChild(w);
   });
 
-  // По категориям
+  // Категории
   const cats = {work:{name:'Работа',color:'#7c6bff'},personal:{name:'Личное',color:'#34d399'},
     health:{name:'Здоровье',color:'#f87171'},study:{name:'Учёба',color:'#f59e0b'}};
   const total = tasks.length || 1;
@@ -893,9 +871,9 @@ function renderStats() {
   });
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
 //  НАПОМИНАНИЯ
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
 function openReminderModal() {
   document.getElementById('rem-name').value = '';
   document.getElementById('rem-modal').classList.add('open');
@@ -909,10 +887,9 @@ async function addReminder() {
   const name = document.getElementById('rem-name').value.trim();
   if (!name) { showToast('Введите название'); return; }
   const r = {
-    id:   Date.now().toString(),
-    name,
+    id: Date.now().toString(), name,
     type: document.getElementById('rem-type').value,
-    time: document.getElementById('rem-time').value
+    time: document.getElementById('rem-time').value,
   };
   reminders.push(r);
   document.getElementById('rem-modal').classList.remove('open');
@@ -920,7 +897,7 @@ async function addReminder() {
   showToast('Напоминание сохранено 🔔');
   if (IN_TG) {
     try { await api('POST', '/api/reminders', r); }
-    catch(e) { console.error('reminder save failed', e); }
+    catch(e) { console.error('reminder save failed:', e); }
   } else localSave();
 }
 
@@ -931,7 +908,7 @@ function renderReminders() {
     list.innerHTML = '<div class="empty"><div class="empty-icon">🔔</div><div>Напоминаний пока нет.</div></div>';
     return;
   }
-  const tl = {once:'Однократно',daily:'Ежедневно',weekly:'Еженедельно'};
+  const tl = { once:'Однократно', daily:'Ежедневно', weekly:'Еженедельно' };
   reminders.forEach(r => {
     const el = document.createElement('div');
     el.className = 'reminder-item';
@@ -943,11 +920,11 @@ function renderReminders() {
         </svg>
       </div>
       <div class="reminder-body">
-        <div class="reminder-name">${escHtml(r.name)}</div>
+        <div class="reminder-name">${esc(r.name)}</div>
         <div class="reminder-desc">${tl[r.type]||r.type} · ${r.time}</div>
       </div>
       <button class="reminder-del" onclick="deleteReminder('${r.id}')">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
       </button>`;
@@ -961,24 +938,27 @@ async function deleteReminder(id) {
   showToast('Напоминание удалено');
   if (IN_TG) {
     try { await api('DELETE', `/api/reminders/${id}`); }
-    catch(e) { console.error('reminder delete failed', e); }
+    catch(e) { console.error('reminder delete failed:', e); }
   } else localSave();
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  TOAST + CSS animation
-// ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+//  УТИЛИТЫ
+// ══════════════════════════════════════════════════════════════════════════
+function formatDue(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('ru',{day:'numeric',month:'short'}) + ', ' +
+    d.toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
+}
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 function showToast(msg) {
   const el = document.getElementById('toast');
   document.getElementById('toast-msg').textContent = msg;
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 2500);
 }
-
-// spin animation для лоадера
-const style = document.createElement('style');
-style.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
-document.head.appendChild(style);
 </script>
 </body>
 </html>
