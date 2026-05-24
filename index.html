@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>TaskFlow</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f0f13;
+    --surface: #1a1a22;
+    --surface2: #22222e;
+    --border: rgba(255,255,255,0.07);
+    --accent: #7c6bff;
+    --accent2: #a78bfa;
+    --text: #f0eeff;
+    --muted: #8884a8;
+    --success: #34d399;
+    --warn: #f59e0b;
+    --danger: #f87171;
+    --radius: 16px;
+    --radius-sm: 10px;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+  body {
+    font-family: 'Manrope', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    padding-bottom: 80px;
+  }
+
+  /* NAV */
+  .nav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    z-index: 100;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .nav-btn {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    gap: 4px; padding: 10px 0; cursor: pointer;
+    font-size: 10px; font-weight: 600; color: var(--muted);
+    letter-spacing: 0.03em; text-transform: uppercase; transition: color 0.2s;
+    border: none; background: none;
+  }
+  .nav-btn svg { width: 22px; height: 22px; stroke: currentColor; fill: none;
+    stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .nav-btn.active { color: var(--accent2); }
+
+  /* PAGES */
+  .page { display: none; padding: 0 16px; }
+  .page.active { display: block; }
+
+  /* HEADER */
+  .header {
+    padding: 52px 16px 20px;
+    background: linear-gradient(180deg, #1a1025 0%, var(--bg) 100%);
+    margin: 0 -16px;
+  }
+  .header-top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .greeting { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .header h1 { font-size: 26px; font-weight: 800; letter-spacing: -0.5px; }
+  .header h1 span { color: var(--accent2); }
+  .avatar {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 700;
+  }
+
+  /* STATS ROW */
+  .stats-row {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 10px; margin: 20px 0;
+  }
+  .stat-card {
+    background: var(--surface); border-radius: var(--radius-sm);
+    padding: 14px 12px; text-align: center;
+    border: 1px solid var(--border);
+  }
+  .stat-num { font-size: 24px; font-weight: 800; }
+  .stat-label { font-size: 10px; color: var(--muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+  .stat-card.done .stat-num { color: var(--success); }
+  .stat-card.active .stat-num { color: var(--accent2); }
+  .stat-card.total .stat-num { color: var(--text); }
+
+  /* PROGRESS BAR */
+  .progress-wrap {
+    background: var(--surface); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 20px; border: 1px solid var(--border);
+  }
+  .progress-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .progress-label { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .progress-pct { font-size: 13px; font-weight: 700; color: var(--accent2); }
+  .progress-bar-bg {
+    height: 6px; background: var(--border);
+    border-radius: 3px; overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%; border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width 0.5s ease;
+  }
+
+  /* SECTION */
+  .section-title {
+    font-size: 12px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    margin: 20px 0 12px;
+  }
+
+  /* FILTER TABS */
+  .filter-tabs { display: flex; gap: 8px; margin-bottom: 16px; overflow-x: auto;
+    padding-bottom: 2px; scrollbar-width: none; }
+  .filter-tabs::-webkit-scrollbar { display: none; }
+  .filter-tab {
+    flex-shrink: 0; padding: 6px 16px; border-radius: 20px;
+    font-size: 12px; font-weight: 700; cursor: pointer; border: none;
+    letter-spacing: 0.03em; transition: all 0.2s;
+    background: var(--surface2); color: var(--muted);
+  }
+  .filter-tab.active {
+    background: var(--accent); color: #fff;
+  }
+
+  /* TASK ITEM */
+  .task-list { display: flex; flex-direction: column; gap: 10px; }
+  .task-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 16px;
+    display: flex; align-items: flex-start; gap: 12px;
+    transition: all 0.3s; animation: fadeIn 0.3s ease;
+  }
+  .task-item.completed { opacity: 0.5; }
+  .task-item.completed .task-title { text-decoration: line-through; color: var(--muted); }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+
+  .task-check {
+    width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border);
+    flex-shrink: 0; cursor: pointer; display: flex; align-items: center;
+    justify-content: center; transition: all 0.2s; margin-top: 1px;
+    background: transparent;
+  }
+  .task-check.done { background: var(--success); border-color: var(--success); }
+  .task-check svg { width: 12px; height: 12px; stroke: #fff; opacity: 0; transition: opacity 0.2s; }
+  .task-check.done svg { opacity: 1; }
+
+  .task-body { flex: 1; min-width: 0; }
+  .task-title { font-size: 15px; font-weight: 600; line-height: 1.3; }
+  .task-meta { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+  .tag {
+    font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .tag.work { background: rgba(124,107,255,0.15); color: var(--accent2); }
+  .tag.personal { background: rgba(52,211,153,0.15); color: var(--success); }
+  .tag.health { background: rgba(248,113,113,0.15); color: var(--danger); }
+  .tag.study { background: rgba(245,158,11,0.15); color: var(--warn); }
+
+  .task-time { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 3px; }
+  .task-time svg { width: 11px; height: 11px; }
+  .task-priority { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 8px; }
+  .task-priority.high { background: var(--danger); }
+  .task-priority.mid { background: var(--warn); }
+  .task-priority.low { background: var(--success); }
+
+  .task-delete {
+    width: 28px; height: 28px; border-radius: 8px; border: none;
+    background: transparent; color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    margin-top: -2px; flex-shrink: 0; transition: all 0.2s;
+  }
+  .task-delete:hover { background: rgba(248,113,113,0.15); color: var(--danger); }
+  .task-delete svg { width: 16px; height: 16px; }
+
+  /* FAB */
+  .fab {
+    position: fixed; bottom: 80px; right: 20px;
+    width: 56px; height: 56px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; cursor: pointer; display: flex; align-items: center;
+    justify-content: center; z-index: 99;
+    box-shadow: 0 4px 20px rgba(124,107,255,0.4);
+    transition: transform 0.2s; color: white;
+  }
+  .fab:active { transform: scale(0.93); }
+  .fab svg { width: 24px; height: 24px; stroke: white; }
+
+  /* MODAL */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    z-index: 200; display: flex; align-items: flex-end;
+    opacity: 0; pointer-events: none; transition: opacity 0.3s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal {
+    background: var(--surface); border-radius: 24px 24px 0 0;
+    width: 100%; padding: 24px 20px 40px;
+    transform: translateY(100%); transition: transform 0.35s cubic-bezier(.4,0,.2,1);
+    max-height: 90vh; overflow-y: auto;
+  }
+  .modal-overlay.open .modal { transform: translateY(0); }
+  .modal-handle { width: 36px; height: 4px; background: var(--border);
+    border-radius: 2px; margin: 0 auto 20px; }
+  .modal h2 { font-size: 20px; font-weight: 800; margin-bottom: 20px; }
+
+  .form-group { margin-bottom: 16px; }
+  .form-label { font-size: 12px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; display: block; }
+  .form-input, .form-select, .form-textarea {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 12px 14px;
+    color: var(--text); font-family: 'Manrope', sans-serif; font-size: 15px;
+    outline: none; transition: border-color 0.2s;
+    -webkit-appearance: none;
+  }
+  .form-input:focus, .form-select:focus, .form-textarea:focus {
+    border-color: var(--accent);
+  }
+  .form-textarea { resize: none; min-height: 80px; }
+  .form-select option { background: var(--surface2); }
+
+  .priority-row { display: flex; gap: 8px; }
+  .priority-btn {
+    flex: 1; padding: 10px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--surface2);
+    color: var(--muted); font-size: 12px; font-weight: 700; cursor: pointer;
+    text-transform: uppercase; letter-spacing: 0.04em; transition: all 0.2s;
+  }
+  .priority-btn.high.active { background: rgba(248,113,113,0.15); color: var(--danger); border-color: var(--danger); }
+  .priority-btn.mid.active { background: rgba(245,158,11,0.15); color: var(--warn); border-color: var(--warn); }
+  .priority-btn.low.active { background: rgba(52,211,153,0.15); color: var(--success); border-color: var(--success); }
+
+  .reminder-row { display: flex; align-items: center; justify-content: space-between;
+    background: var(--surface2); border-radius: var(--radius-sm); padding: 14px; }
+  .toggle-wrap { display: flex; flex-direction: column; }
+  .toggle-title { font-size: 14px; font-weight: 600; }
+  .toggle-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .toggle {
+    width: 44px; height: 26px; border-radius: 13px;
+    background: var(--border); cursor: pointer; position: relative;
+    transition: background 0.25s; border: none; flex-shrink: 0;
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle::after {
+    content: ''; position: absolute; width: 20px; height: 20px;
+    border-radius: 50%; background: white; top: 3px; left: 3px;
+    transition: left 0.25s;
+  }
+  .toggle.on::after { left: 21px; }
+
+  .reminder-time { display: none; margin-top: 10px; }
+  .reminder-time.show { display: block; }
+
+  .submit-btn {
+    width: 100%; padding: 16px; border-radius: var(--radius);
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; color: white; font-family: 'Manrope', sans-serif;
+    font-size: 16px; font-weight: 800; cursor: pointer; margin-top: 8px;
+    letter-spacing: 0.02em; transition: transform 0.2s;
+  }
+  .submit-btn:active { transform: scale(0.98); }
+
+  /* STATS PAGE */
+  .chart-wrap {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+  }
+  .chart-title { font-size: 13px; font-weight: 700; color: var(--muted); margin-bottom: 14px; }
+  .bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 100px; }
+  .bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .bar { width: 100%; border-radius: 4px 4px 0 0; min-height: 4px;
+    background: linear-gradient(180deg, var(--accent2), var(--accent));
+    transition: height 0.5s ease; }
+  .bar.done-bar { background: linear-gradient(180deg, var(--success), #059669); }
+  .bar-day { font-size: 10px; color: var(--muted); font-weight: 600; }
+
+  .streak-card {
+    background: linear-gradient(135deg, rgba(124,107,255,0.15), rgba(167,139,250,0.1));
+    border: 1px solid rgba(124,107,255,0.2); border-radius: var(--radius);
+    padding: 20px; margin-bottom: 16px; display: flex; align-items: center; gap: 16px;
+  }
+  .streak-num { font-size: 48px; font-weight: 800; color: var(--accent2); line-height: 1; }
+  .streak-info h3 { font-size: 16px; font-weight: 700; }
+  .streak-info p { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  .category-row { display: flex; flex-direction: column; gap: 10px; }
+  .cat-item { display: flex; align-items: center; gap: 12px; }
+  .cat-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .cat-name { flex: 1; font-size: 14px; font-weight: 600; }
+  .cat-pct { font-size: 13px; color: var(--muted); font-weight: 600; }
+  .cat-bar-bg { height: 4px; flex: 2; background: var(--border); border-radius: 2px; }
+  .cat-bar-fill { height: 100%; border-radius: 2px; }
+
+  /* REMINDERS PAGE */
+  .reminder-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 16px;
+    display: flex; align-items: center; gap: 12px; margin-bottom: 10px;
+    animation: fadeIn 0.3s ease;
+  }
+  .reminder-icon {
+    width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(124,107,255,0.12);
+  }
+  .reminder-icon svg { width: 20px; height: 20px; stroke: var(--accent2); }
+  .reminder-body { flex: 1; }
+  .reminder-name { font-size: 14px; font-weight: 700; }
+  .reminder-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .reminder-del {
+    width: 28px; height: 28px; border-radius: 8px; border: none;
+    background: transparent; color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .reminder-del svg { width: 16px; height: 16px; }
+
+  .empty {
+    text-align: center; padding: 60px 20px;
+    color: var(--muted); font-size: 14px; line-height: 1.6;
+  }
+  .empty-icon { font-size: 40px; margin-bottom: 12px; }
+
+  /* TOAST */
+  .toast {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-100px);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 50px; padding: 10px 20px;
+    font-size: 13px; font-weight: 600; z-index: 300;
+    display: flex; align-items: center; gap: 8px;
+    transition: transform 0.4s cubic-bezier(.4,0,.2,1);
+    white-space: nowrap; max-width: 90vw;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast svg { width: 16px; height: 16px; stroke: var(--success); }
+</style>
+</head>
+<body>
+
+<!-- TOAST -->
+<div class="toast" id="toast">
+  <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="20 6 9 17 4 12"/>
+  </svg>
+  <span id="toast-msg">Готово!</span>
+</div>
+
+<!-- PAGE: TASKS -->
+<div class="page active" id="page-tasks">
+  <div class="header">
+    <div class="header-top">
+      <div>
+        <div class="greeting" id="greeting">Доброе утро 👋</div>
+        <h1>Мои <span>задачи</span></h1>
+      </div>
+      <div class="avatar" id="user-avatar">T</div>
+    </div>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-card total">
+      <div class="stat-num" id="s-total">0</div>
+      <div class="stat-label">Всего</div>
+    </div>
+    <div class="stat-card active">
+      <div class="stat-num" id="s-active">0</div>
+      <div class="stat-label">Активных</div>
+    </div>
+    <div class="stat-card done">
+      <div class="stat-num" id="s-done">0</div>
+      <div class="stat-label">Готово</div>
+    </div>
+  </div>
+
+  <div class="progress-wrap">
+    <div class="progress-top">
+      <span class="progress-label">Прогресс сегодня</span>
+      <span class="progress-pct" id="progress-pct">0%</span>
+    </div>
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+  </div>
+
+  <div class="filter-tabs">
+    <button class="filter-tab active" data-filter="all">Все</button>
+    <button class="filter-tab" data-filter="active">Активные</button>
+    <button class="filter-tab" data-filter="done">Выполненные</button>
+    <button class="filter-tab" data-filter="work">Работа</button>
+    <button class="filter-tab" data-filter="personal">Личное</button>
+    <button class="filter-tab" data-filter="health">Здоровье</button>
+    <button class="filter-tab" data-filter="study">Учёба</button>
+  </div>
+
+  <div class="task-list" id="task-list"></div>
+</div>
+
+<!-- PAGE: STATS -->
+<div class="page" id="page-stats">
+  <div class="header">
+    <h1>Стати<span>стика</span></h1>
+  </div>
+
+  <div class="streak-card">
+    <div class="streak-num" id="streak-num">0</div>
+    <div class="streak-info">
+      <h3>Дней подряд</h3>
+      <p>Продолжайте в том же духе!</p>
+    </div>
+  </div>
+
+  <div class="chart-wrap">
+    <div class="chart-title">ЗАДАЧИ ЗА НЕДЕЛЮ</div>
+    <div class="bar-chart" id="week-chart"></div>
+  </div>
+
+  <div class="chart-wrap">
+    <div class="chart-title">ПО КАТЕГОРИЯМ</div>
+    <div class="category-row" id="cat-chart"></div>
+  </div>
+</div>
+
+<!-- PAGE: REMINDERS -->
+<div class="page" id="page-reminders">
+  <div class="header">
+    <h1>Напомина<span>ния</span></h1>
+  </div>
+
+  <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+    Настройте напоминания, чтобы не пропустить важные задачи. Они придут в Telegram.
+  </p>
+
+  <div id="reminders-list"></div>
+  <button class="submit-btn" onclick="openReminderModal()" style="margin-top:4px">
+    + Добавить напоминание
+  </button>
+</div>
+
+<!-- FAB -->
+<button class="fab" id="fab" onclick="openAddModal()">
+  <svg viewBox="0 0 24 24" stroke-width="2.5" stroke-linecap="round">
+    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  </svg>
+</button>
+
+<!-- NAV -->
+<nav class="nav">
+  <button class="nav-btn active" data-page="tasks">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    Задачи
+  </button>
+  <button class="nav-btn" data-page="stats">
+    <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+    Статистика
+  </button>
+  <button class="nav-btn" data-page="reminders">
+    <svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    Напоминания
+  </button>
+</nav>
+
+<!-- ADD TASK MODAL -->
+<div class="modal-overlay" id="add-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h2>Новая задача</h2>
+
+    <div class="form-group">
+      <label class="form-label">Название</label>
+      <input type="text" class="form-input" id="task-name" placeholder="Что нужно сделать?">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Категория</label>
+      <select class="form-select" id="task-cat">
+        <option value="work">💼 Работа</option>
+        <option value="personal">🏠 Личное</option>
+        <option value="health">❤️ Здоровье</option>
+        <option value="study">📚 Учёба</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Приоритет</label>
+      <div class="priority-row">
+        <button class="priority-btn high" onclick="setPriority('high')">🔴 Высокий</button>
+        <button class="priority-btn mid active" onclick="setPriority('mid')">🟡 Средний</button>
+        <button class="priority-btn low" onclick="setPriority('low')">🟢 Низкий</button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Срок (необязательно)</label>
+      <input type="datetime-local" class="form-input" id="task-due">
+    </div>
+
+    <div class="form-group">
+      <div class="reminder-row">
+        <div class="toggle-wrap">
+          <span class="toggle-title">Напоминание</span>
+          <span class="toggle-sub">Уведомление в Telegram</span>
+        </div>
+        <button class="toggle" id="remind-toggle" onclick="toggleRemind()"></button>
+      </div>
+      <div class="reminder-time" id="remind-time-wrap">
+        <input type="datetime-local" class="form-input" id="remind-time" style="margin-top:10px">
+      </div>
+    </div>
+
+    <button class="submit-btn" onclick="addTask()">Добавить задачу</button>
+  </div>
+</div>
+
+<!-- REMINDER MODAL -->
+<div class="modal-overlay" id="rem-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h2>Новое напоминание</h2>
+
+    <div class="form-group">
+      <label class="form-label">Название</label>
+      <input type="text" class="form-input" id="rem-name" placeholder="Название напоминания">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Тип</label>
+      <select class="form-select" id="rem-type">
+        <option value="once">Однократно</option>
+        <option value="daily">Ежедневно</option>
+        <option value="weekly">Еженедельно</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Время</label>
+      <input type="time" class="form-input" id="rem-time" value="09:00">
+    </div>
+
+    <button class="submit-btn" onclick="addReminder()">Сохранить</button>
+  </div>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  tg.setHeaderColor('#0f0f13');
+  tg.setBackgroundColor('#0f0f13');
+}
+
+let tasks = JSON.parse(localStorage.getItem('tflow_tasks') || '[]');
+let reminders = JSON.parse(localStorage.getItem('tflow_reminders') || '[]');
+let currentFilter = 'all';
+let currentPriority = 'mid';
+let reminderOn = false;
+
+// Init
+setGreeting();
+setUserInfo();
+renderTasks();
+renderStats();
+renderReminders();
+
+function setGreeting() {
+  const h = new Date().getHours();
+  const el = document.getElementById('greeting');
+  if (h < 12) el.textContent = 'Доброе утро 👋';
+  else if (h < 18) el.textContent = 'Добрый день 👋';
+  else el.textContent = 'Добрый вечер 👋';
+}
+
+function setUserInfo() {
+  if (tg?.initDataUnsafe?.user) {
+    const u = tg.initDataUnsafe.user;
+    const name = u.first_name || 'T';
+    document.getElementById('user-avatar').textContent = name[0].toUpperCase();
+  }
+}
+
+// NAV
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const page = btn.dataset.page;
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('page-' + page).classList.add('active');
+    document.getElementById('fab').style.display = page === 'tasks' ? 'flex' : 'none';
+    if (page === 'stats') renderStats();
+  });
+});
+
+// FILTER
+document.querySelectorAll('.filter-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentFilter = tab.dataset.filter;
+    renderTasks();
+  });
+});
+
+function saveTasks() { localStorage.setItem('tflow_tasks', JSON.stringify(tasks)); }
+function saveReminders() { localStorage.setItem('tflow_reminders', JSON.stringify(reminders)); }
+
+function renderTasks() {
+  const list = document.getElementById('task-list');
+  let filtered = tasks;
+  if (currentFilter === 'active') filtered = tasks.filter(t => !t.done);
+  else if (currentFilter === 'done') filtered = tasks.filter(t => t.done);
+  else if (['work','personal','health','study'].includes(currentFilter))
+    filtered = tasks.filter(t => t.cat === currentFilter);
+
+  list.innerHTML = '';
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty"><div class="empty-icon">✨</div><div>Задач нет.<br>Добавьте первую!</div></div>';
+    return;
+  }
+  filtered.forEach(t => {
+    list.appendChild(createTaskEl(t));
+  });
+  updateStats();
+}
+
+function createTaskEl(t) {
+  const el = document.createElement('div');
+  el.className = 'task-item' + (t.done ? ' completed' : '');
+  el.dataset.id = t.id;
+
+  const catLabels = { work: 'Работа', personal: 'Личное', health: 'Здоровье', study: 'Учёба' };
+  const dueHtml = t.due ? `<span class="task-time">
+    <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" fill="none"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    ${formatDue(t.due)}
+  </span>` : '';
+
+  el.innerHTML = `
+    <button class="task-check ${t.done ? 'done' : ''}" onclick="toggleTask('${t.id}')">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    </button>
+    <div class="task-body">
+      <div class="task-title">${escHtml(t.title)}</div>
+      <div class="task-meta">
+        <span class="tag ${t.cat}">${catLabels[t.cat]}</span>
+        ${dueHtml}
+      </div>
+    </div>
+    <div class="task-priority ${t.priority}"></div>
+    <button class="task-delete" onclick="deleteTask('${t.id}')">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
+      </svg>
+    </button>
+  `;
+  return el;
+}
+
+function toggleTask(id) {
+  const t = tasks.find(x => x.id === id);
+  if (!t) return;
+  t.done = !t.done;
+  if (t.done) t.doneAt = Date.now();
+  saveTasks();
+  renderTasks();
+  if (t.done) showToast('Задача выполнена! 🎉');
+}
+
+function deleteTask(id) {
+  tasks = tasks.filter(x => x.id !== id);
+  saveTasks();
+  renderTasks();
+  showToast('Задача удалена');
+}
+
+function updateStats() {
+  const total = tasks.length;
+  const done = tasks.filter(t => t.done).length;
+  const active = total - done;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  document.getElementById('s-total').textContent = total;
+  document.getElementById('s-done').textContent = done;
+  document.getElementById('s-active').textContent = active;
+  document.getElementById('progress-pct').textContent = pct + '%';
+  document.getElementById('progress-fill').style.width = pct + '%';
+}
+
+function formatDue(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('ru', { day:'numeric', month:'short' }) + ', ' +
+    d.toLocaleTimeString('ru', { hour:'2-digit', minute:'2-digit' });
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ADD TASK MODAL
+function openAddModal() {
+  document.getElementById('task-name').value = '';
+  document.getElementById('task-due').value = '';
+  document.getElementById('remind-time').value = '';
+  reminderOn = false;
+  document.getElementById('remind-toggle').classList.remove('on');
+  document.getElementById('remind-time-wrap').classList.remove('show');
+  document.getElementById('add-modal').classList.add('open');
+}
+document.getElementById('add-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('add-modal'))
+    document.getElementById('add-modal').classList.remove('open');
+});
+
+function setPriority(p) {
+  currentPriority = p;
+  document.querySelectorAll('.priority-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.priority-btn.' + p).classList.add('active');
+}
+
+function toggleRemind() {
+  reminderOn = !reminderOn;
+  document.getElementById('remind-toggle').classList.toggle('on', reminderOn);
+  document.getElementById('remind-time-wrap').classList.toggle('show', reminderOn);
+}
+
+function addTask() {
+  const name = document.getElementById('task-name').value.trim();
+  if (!name) { showToast('Введите название задачи'); return; }
+  const task = {
+    id: Date.now().toString(),
+    title: name,
+    cat: document.getElementById('task-cat').value,
+    priority: currentPriority,
+    due: document.getElementById('task-due').value || null,
+    remind: reminderOn ? document.getElementById('remind-time').value : null,
+    done: false,
+    createdAt: Date.now()
+  };
+  tasks.unshift(task);
+  saveTasks();
+  document.getElementById('add-modal').classList.remove('open');
+  currentFilter = 'all';
+  document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('.filter-tab[data-filter="all"]').classList.add('active');
+  renderTasks();
+  showToast('Задача добавлена! ✅');
+
+  if (task.remind && tg) {
+    // In a real bot scenario, you'd send this to the bot backend
+    tg.sendData(JSON.stringify({ action: 'remind', task: task }));
+  }
+}
+
+// STATS
+function renderStats() {
+  renderWeekChart();
+  renderCatChart();
+  renderStreak();
+}
+
+function renderStreak() {
+  const today = new Date();
+  let streak = 0;
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const key = d.toDateString();
+    const hasDone = tasks.some(t => t.done && new Date(t.doneAt).toDateString() === key);
+    if (hasDone) streak++;
+    else if (i > 0) break;
+  }
+  document.getElementById('streak-num').textContent = streak;
+}
+
+function renderWeekChart() {
+  const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  const chart = document.getElementById('week-chart');
+  chart.innerHTML = '';
+  const today = new Date();
+  const data = days.map((d, i) => {
+    const date = new Date(today);
+    const dow = today.getDay() || 7;
+    date.setDate(date.getDate() - (dow - 1 - i));
+    const dateStr = date.toDateString();
+    const total = tasks.filter(t => new Date(t.createdAt).toDateString() === dateStr).length;
+    const done = tasks.filter(t => t.done && new Date(t.doneAt).toDateString() === dateStr).length;
+    return { day: d, total, done };
+  });
+
+  const maxVal = Math.max(...data.map(d => d.total), 1);
+  data.forEach(d => {
+    const wrap = document.createElement('div');
+    wrap.className = 'bar-wrap';
+    const totalH = Math.max((d.total / maxVal) * 90, 4);
+    const doneH = d.total ? Math.max((d.done / d.total) * totalH, 4) : 4;
+    wrap.innerHTML = `
+      <div class="bar" style="height:${totalH}px"></div>
+      <div class="bar-day">${d.day}</div>
+    `;
+    chart.appendChild(wrap);
+  });
+}
+
+function renderCatChart() {
+  const cats = { work: { name: 'Работа', color: '#7c6bff' }, personal: { name: 'Личное', color: '#34d399' },
+    health: { name: 'Здоровье', color: '#f87171' }, study: { name: 'Учёба', color: '#f59e0b' } };
+  const total = tasks.length || 1;
+  const chart = document.getElementById('cat-chart');
+  chart.innerHTML = '';
+  Object.entries(cats).forEach(([key, cat]) => {
+    const count = tasks.filter(t => t.cat === key).length;
+    const pct = Math.round((count / total) * 100);
+    const el = document.createElement('div');
+    el.className = 'cat-item';
+    el.innerHTML = `
+      <div class="cat-dot" style="background:${cat.color}"></div>
+      <div class="cat-name">${cat.name}</div>
+      <div class="cat-bar-bg">
+        <div class="cat-bar-fill" style="width:${pct}%;background:${cat.color}"></div>
+      </div>
+      <div class="cat-pct">${pct}%</div>
+    `;
+    chart.appendChild(el);
+  });
+}
+
+// REMINDERS
+function openReminderModal() {
+  document.getElementById('rem-name').value = '';
+  document.getElementById('rem-modal').classList.add('open');
+}
+document.getElementById('rem-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('rem-modal'))
+    document.getElementById('rem-modal').classList.remove('open');
+});
+
+function addReminder() {
+  const name = document.getElementById('rem-name').value.trim();
+  if (!name) { showToast('Введите название'); return; }
+  const r = {
+    id: Date.now().toString(),
+    name,
+    type: document.getElementById('rem-type').value,
+    time: document.getElementById('rem-time').value
+  };
+  reminders.push(r);
+  saveReminders();
+  document.getElementById('rem-modal').classList.remove('open');
+  renderReminders();
+  showToast('Напоминание сохранено 🔔');
+}
+
+function renderReminders() {
+  const list = document.getElementById('reminders-list');
+  list.innerHTML = '';
+  if (!reminders.length) {
+    list.innerHTML = '<div class="empty"><div class="empty-icon">🔔</div><div>Напоминаний пока нет.<br>Добавьте первое!</div></div>';
+    return;
+  }
+  const typeLabels = { once: 'Однократно', daily: 'Ежедневно', weekly: 'Еженедельно' };
+  reminders.forEach(r => {
+    const el = document.createElement('div');
+    el.className = 'reminder-item';
+    el.innerHTML = `
+      <div class="reminder-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+      </div>
+      <div class="reminder-body">
+        <div class="reminder-name">${escHtml(r.name)}</div>
+        <div class="reminder-desc">${typeLabels[r.type]} · ${r.time}</div>
+      </div>
+      <button class="reminder-del" onclick="deleteReminder('${r.id}')">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    `;
+    list.appendChild(el);
+  });
+}
+
+function deleteReminder(id) {
+  reminders = reminders.filter(r => r.id !== id);
+  saveReminders();
+  renderReminders();
+  showToast('Напоминание удалено');
+}
+
+// TOAST
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  document.getElementById('toast-msg').textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// Seed demo tasks if empty
+if (!tasks.length) {
+  tasks = [
+    { id: '1', title: 'Подготовить отчёт по Q3', cat: 'work', priority: 'high', done: false, createdAt: Date.now() - 3600000 },
+    { id: '2', title: 'Записаться к врачу', cat: 'health', priority: 'mid', done: false, createdAt: Date.now() - 7200000 },
+    { id: '3', title: 'Прочитать главу из книги', cat: 'study', priority: 'low', done: true, doneAt: Date.now() - 1800000, createdAt: Date.now() - 86400000 },
+    { id: '4', title: 'Купить продукты', cat: 'personal', priority: 'mid', done: true, doneAt: Date.now() - 3600000, createdAt: Date.now() - 86400000 },
+    { id: '5', title: 'Закрыть задачи по спринту', cat: 'work', priority: 'high', done: false, createdAt: Date.now() - 1800000 },
+  ];
+  saveTasks();
+  renderTasks();
+}
+</script>
+</body>
+</html>
