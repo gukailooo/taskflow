@@ -559,18 +559,74 @@ if (tg) {
   tg.setBackgroundColor('#0f0f13');
 }
 
-let tasks = JSON.parse(localStorage.getItem('tflow_tasks') || '[]');
-let reminders = JSON.parse(localStorage.getItem('tflow_reminders') || '[]');
+// ── Надёжное определение: открыто внутри Telegram или нет ─────────────────
+// Проверяем tg.initData (строка, непустая только в реальном Telegram-контексте).
+// НЕ используем initDataUnsafe — он может быть пустым при некоторых сценариях.
+const IN_TG = !!(tg && tg.initData && tg.initData.length > 0);
+
+let tasks = [];
+let reminders = [];
 let currentFilter = 'all';
 let currentPriority = 'mid';
 let reminderOn = false;
 
-// Init
+// ── Инициализация ─────────────────────────────────────────────────────────
 setGreeting();
 setUserInfo();
-renderTasks();
-renderStats();
-renderReminders();
+
+if (IN_TG) {
+  // Открыто в Telegram — очищаем localStorage чтобы старые данные не мешали,
+  // затем загружаем актуальные данные из URL-параметра (бот передаёт их при открытии)
+  localStorage.removeItem('tflow_tasks');
+  localStorage.removeItem('tflow_reminders');
+  loadFromBot();
+} else {
+  // Браузерный режим (тест без Telegram) — чистый localStorage, без демо-данных
+  tasks     = JSON.parse(localStorage.getItem('tflow_tasks')     || '[]');
+  reminders = JSON.parse(localStorage.getItem('tflow_reminders') || '[]');
+  renderTasks();
+  renderStats();
+  renderReminders();
+}
+
+// ── Загрузка данных из бота ───────────────────────────────────────────────
+function loadFromBot() {
+  // Бот формирует ссылку: https://your-app.com/?data=<base64(json)>
+  // и передаёт туда задачи/напоминания пользователя из БД.
+  // Если ?data= отсутствует — пользователь новый, показываем пустой список.
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get('data');
+
+  if (raw) {
+    try {
+      const parsed = JSON.parse(atob(decodeURIComponent(raw)));
+      tasks     = Array.isArray(parsed.tasks)     ? parsed.tasks     : [];
+      reminders = Array.isArray(parsed.reminders) ? parsed.reminders : [];
+    } catch(e) {
+      console.warn('Ошибка разбора данных от бота:', e);
+      tasks = []; reminders = [];
+    }
+  } else {
+    // Новый пользователь — данных нет, всё с нуля
+    tasks = []; reminders = [];
+  }
+
+  renderTasks();
+  renderStats();
+  renderReminders();
+}
+
+// ── Синхронизация с ботом ─────────────────────────────────────────────────
+// После любого изменения отправляем актуальное состояние боту через sendData.
+// Бот сохраняет в БД и может переоткрыть app с обновлёнными данными.
+function syncToBot(action, payload) {
+  if (IN_TG) {
+    tg.sendData(JSON.stringify({ action, payload, tasks, reminders }));
+  } else {
+    localStorage.setItem('tflow_tasks',     JSON.stringify(tasks));
+    localStorage.setItem('tflow_reminders', JSON.stringify(reminders));
+  }
+}
 
 function setGreeting() {
   const h = new Date().getHours();
@@ -583,12 +639,11 @@ function setGreeting() {
 function setUserInfo() {
   if (tg?.initDataUnsafe?.user) {
     const u = tg.initDataUnsafe.user;
-    const name = u.first_name || 'T';
-    document.getElementById('user-avatar').textContent = name[0].toUpperCase();
+    document.getElementById('user-avatar').textContent = (u.first_name || 'U')[0].toUpperCase();
   }
 }
 
-// NAV
+// ── NAV ───────────────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const page = btn.dataset.page;
@@ -601,7 +656,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   });
 });
 
-// FILTER
+// ── FILTER ────────────────────────────────────────────────────────────────
 document.querySelectorAll('.filter-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
@@ -611,25 +666,26 @@ document.querySelectorAll('.filter-tab').forEach(tab => {
   });
 });
 
-function saveTasks() { localStorage.setItem('tflow_tasks', JSON.stringify(tasks)); }
-function saveReminders() { localStorage.setItem('tflow_reminders', JSON.stringify(reminders)); }
-
+// ── RENDER TASKS ──────────────────────────────────────────────────────────
 function renderTasks() {
   const list = document.getElementById('task-list');
   let filtered = tasks;
-  if (currentFilter === 'active') filtered = tasks.filter(t => !t.done);
-  else if (currentFilter === 'done') filtered = tasks.filter(t => t.done);
+  if (currentFilter === 'active')       filtered = tasks.filter(t => !t.done);
+  else if (currentFilter === 'done')    filtered = tasks.filter(t => t.done);
   else if (['work','personal','health','study'].includes(currentFilter))
     filtered = tasks.filter(t => t.cat === currentFilter);
 
   list.innerHTML = '';
   if (!filtered.length) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">✨</div><div>Задач нет.<br>Добавьте первую!</div></div>';
+    list.innerHTML = `
+      <div class="empty">
+        <div class="empty-icon">✨</div>
+        <div>Задач нет.<br>Нажмите <strong>+</strong> чтобы добавить первую!</div>
+      </div>`;
+    updateStats();
     return;
   }
-  filtered.forEach(t => {
-    list.appendChild(createTaskEl(t));
-  });
+  filtered.forEach(t => list.appendChild(createTaskEl(t)));
   updateStats();
 }
 
@@ -640,7 +696,9 @@ function createTaskEl(t) {
 
   const catLabels = { work: 'Работа', personal: 'Личное', health: 'Здоровье', study: 'Учёба' };
   const dueHtml = t.due ? `<span class="task-time">
-    <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" fill="none"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" fill="none">
+      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+    </svg>
     ${formatDue(t.due)}
   </span>` : '';
 
@@ -653,14 +711,16 @@ function createTaskEl(t) {
     <div class="task-body">
       <div class="task-title">${escHtml(t.title)}</div>
       <div class="task-meta">
-        <span class="tag ${t.cat}">${catLabels[t.cat]}</span>
+        <span class="tag ${t.cat}">${catLabels[t.cat] || t.cat}</span>
         ${dueHtml}
       </div>
     </div>
     <div class="task-priority ${t.priority}"></div>
     <button class="task-delete" onclick="deleteTask('${t.id}')">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6l-1 14H6L5 6"/>
+        <path d="M10 11v6"/><path d="M14 11v6"/>
       </svg>
     </button>
   `;
@@ -671,26 +731,26 @@ function toggleTask(id) {
   const t = tasks.find(x => x.id === id);
   if (!t) return;
   t.done = !t.done;
-  if (t.done) t.doneAt = Date.now();
-  saveTasks();
+  t.doneAt = t.done ? Date.now() : null;
+  syncToBot('toggle_task', { id });
   renderTasks();
   if (t.done) showToast('Задача выполнена! 🎉');
 }
 
 function deleteTask(id) {
   tasks = tasks.filter(x => x.id !== id);
-  saveTasks();
+  syncToBot('delete_task', { id });
   renderTasks();
   showToast('Задача удалена');
 }
 
 function updateStats() {
   const total = tasks.length;
-  const done = tasks.filter(t => t.done).length;
+  const done  = tasks.filter(t => t.done).length;
   const active = total - done;
   const pct = total ? Math.round((done / total) * 100) : 0;
-  document.getElementById('s-total').textContent = total;
-  document.getElementById('s-done').textContent = done;
+  document.getElementById('s-total').textContent  = total;
+  document.getElementById('s-done').textContent   = done;
   document.getElementById('s-active').textContent = active;
   document.getElementById('progress-pct').textContent = pct + '%';
   document.getElementById('progress-fill').style.width = pct + '%';
@@ -703,13 +763,13 @@ function formatDue(iso) {
 }
 
 function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ADD TASK MODAL
+// ── ADD TASK ──────────────────────────────────────────────────────────────
 function openAddModal() {
   document.getElementById('task-name').value = '';
-  document.getElementById('task-due').value = '';
+  document.getElementById('task-due').value  = '';
   document.getElementById('remind-time').value = '';
   reminderOn = false;
   document.getElementById('remind-toggle').classList.remove('on');
@@ -736,45 +796,45 @@ function toggleRemind() {
 function addTask() {
   const name = document.getElementById('task-name').value.trim();
   if (!name) { showToast('Введите название задачи'); return; }
+
   const task = {
-    id: Date.now().toString(),
-    title: name,
-    cat: document.getElementById('task-cat').value,
-    priority: currentPriority,
-    due: document.getElementById('task-due').value || null,
-    remind: reminderOn ? document.getElementById('remind-time').value : null,
-    done: false,
+    id:        Date.now().toString(),
+    title:     name,
+    cat:       document.getElementById('task-cat').value,
+    priority:  currentPriority,
+    due:       document.getElementById('task-due').value || null,
+    remind:    reminderOn ? document.getElementById('remind-time').value : null,
+    done:      false,
+    doneAt:    null,
     createdAt: Date.now()
   };
+
   tasks.unshift(task);
-  saveTasks();
+  syncToBot('add_task', task);
+
   document.getElementById('add-modal').classList.remove('open');
   currentFilter = 'all';
   document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
   document.querySelector('.filter-tab[data-filter="all"]').classList.add('active');
   renderTasks();
   showToast('Задача добавлена! ✅');
-
-  if (task.remind && tg) {
-    // In a real bot scenario, you'd send this to the bot backend
-    tg.sendData(JSON.stringify({ action: 'remind', task: task }));
-  }
 }
 
-// STATS
+// ── STATS ─────────────────────────────────────────────────────────────────
 function renderStats() {
+  renderStreak();
   renderWeekChart();
   renderCatChart();
-  renderStreak();
 }
 
 function renderStreak() {
   const today = new Date();
   let streak = 0;
-  for (let i = 0; i < 30; i++) {
-    const d = new Date(today); d.setDate(d.getDate() - i);
+  for (let i = 0; i < 60; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
     const key = d.toDateString();
-    const hasDone = tasks.some(t => t.done && new Date(t.doneAt).toDateString() === key);
+    const hasDone = tasks.some(t => t.done && t.doneAt && new Date(t.doneAt).toDateString() === key);
     if (hasDone) streak++;
     else if (i > 0) break;
   }
@@ -788,37 +848,36 @@ function renderWeekChart() {
   const today = new Date();
   const data = days.map((d, i) => {
     const date = new Date(today);
-    const dow = today.getDay() || 7;
+    const dow  = today.getDay() || 7;
     date.setDate(date.getDate() - (dow - 1 - i));
     const dateStr = date.toDateString();
     const total = tasks.filter(t => new Date(t.createdAt).toDateString() === dateStr).length;
-    const done = tasks.filter(t => t.done && new Date(t.doneAt).toDateString() === dateStr).length;
+    const done  = tasks.filter(t => t.done && t.doneAt && new Date(t.doneAt).toDateString() === dateStr).length;
     return { day: d, total, done };
   });
-
   const maxVal = Math.max(...data.map(d => d.total), 1);
   data.forEach(d => {
     const wrap = document.createElement('div');
     wrap.className = 'bar-wrap';
-    const totalH = Math.max((d.total / maxVal) * 90, 4);
-    const doneH = d.total ? Math.max((d.done / d.total) * totalH, 4) : 4;
-    wrap.innerHTML = `
-      <div class="bar" style="height:${totalH}px"></div>
-      <div class="bar-day">${d.day}</div>
-    `;
+    const h = Math.max((d.total / maxVal) * 90, 4);
+    wrap.innerHTML = `<div class="bar" style="height:${h}px"></div><div class="bar-day">${d.day}</div>`;
     chart.appendChild(wrap);
   });
 }
 
 function renderCatChart() {
-  const cats = { work: { name: 'Работа', color: '#7c6bff' }, personal: { name: 'Личное', color: '#34d399' },
-    health: { name: 'Здоровье', color: '#f87171' }, study: { name: 'Учёба', color: '#f59e0b' } };
+  const cats = {
+    work:     { name: 'Работа',   color: '#7c6bff' },
+    personal: { name: 'Личное',   color: '#34d399' },
+    health:   { name: 'Здоровье', color: '#f87171' },
+    study:    { name: 'Учёба',    color: '#f59e0b' }
+  };
   const total = tasks.length || 1;
   const chart = document.getElementById('cat-chart');
   chart.innerHTML = '';
   Object.entries(cats).forEach(([key, cat]) => {
     const count = tasks.filter(t => t.cat === key).length;
-    const pct = Math.round((count / total) * 100);
+    const pct   = Math.round((count / total) * 100);
     const el = document.createElement('div');
     el.className = 'cat-item';
     el.innerHTML = `
@@ -827,13 +886,12 @@ function renderCatChart() {
       <div class="cat-bar-bg">
         <div class="cat-bar-fill" style="width:${pct}%;background:${cat.color}"></div>
       </div>
-      <div class="cat-pct">${pct}%</div>
-    `;
+      <div class="cat-pct">${pct}%</div>`;
     chart.appendChild(el);
   });
 }
 
-// REMINDERS
+// ── REMINDERS ─────────────────────────────────────────────────────────────
 function openReminderModal() {
   document.getElementById('rem-name').value = '';
   document.getElementById('rem-modal').classList.add('open');
@@ -847,13 +905,13 @@ function addReminder() {
   const name = document.getElementById('rem-name').value.trim();
   if (!name) { showToast('Введите название'); return; }
   const r = {
-    id: Date.now().toString(),
+    id:   Date.now().toString(),
     name,
     type: document.getElementById('rem-type').value,
     time: document.getElementById('rem-time').value
   };
   reminders.push(r);
-  saveReminders();
+  syncToBot('add_reminder', r);
   document.getElementById('rem-modal').classList.remove('open');
   renderReminders();
   showToast('Напоминание сохранено 🔔');
@@ -879,44 +937,30 @@ function renderReminders() {
       </div>
       <div class="reminder-body">
         <div class="reminder-name">${escHtml(r.name)}</div>
-        <div class="reminder-desc">${typeLabels[r.type]} · ${r.time}</div>
+        <div class="reminder-desc">${typeLabels[r.type] || r.type} · ${r.time}</div>
       </div>
       <button class="reminder-del" onclick="deleteReminder('${r.id}')">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
-      </button>
-    `;
+      </button>`;
     list.appendChild(el);
   });
 }
 
 function deleteReminder(id) {
   reminders = reminders.filter(r => r.id !== id);
-  saveReminders();
+  syncToBot('delete_reminder', { id });
   renderReminders();
   showToast('Напоминание удалено');
 }
 
-// TOAST
+// ── TOAST ─────────────────────────────────────────────────────────────────
 function showToast(msg) {
   const el = document.getElementById('toast');
   document.getElementById('toast-msg').textContent = msg;
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 2500);
-}
-
-// Seed demo tasks if empty
-if (!tasks.length) {
-  tasks = [
-    { id: '1', title: 'Подготовить отчёт по Q3', cat: 'work', priority: 'high', done: false, createdAt: Date.now() - 3600000 },
-    { id: '2', title: 'Записаться к врачу', cat: 'health', priority: 'mid', done: false, createdAt: Date.now() - 7200000 },
-    { id: '3', title: 'Прочитать главу из книги', cat: 'study', priority: 'low', done: true, doneAt: Date.now() - 1800000, createdAt: Date.now() - 86400000 },
-    { id: '4', title: 'Купить продукты', cat: 'personal', priority: 'mid', done: true, doneAt: Date.now() - 3600000, createdAt: Date.now() - 86400000 },
-    { id: '5', title: 'Закрыть задачи по спринту', cat: 'work', priority: 'high', done: false, createdAt: Date.now() - 1800000 },
-  ];
-  saveTasks();
-  renderTasks();
 }
 </script>
 </body>
